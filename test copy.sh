@@ -1,8 +1,8 @@
 #!/bin/sh
 
-export queueName="redis_to_db_queue"
-export diskQueuePath="./q/"${queueName}
-export redisClientAddr="redishos"
+export queueName="ingestdqueue"
+export diskQueuePath="./"${queueName}
+export redisClientAddr="redishost"
 export redisClientPort="6379"
 export redisClientPass=""
 export redisClientDB=1
@@ -18,7 +18,7 @@ export targetDatabaseDSN="postgres://postgres:postgres@postgreshost/postgres?ssl
 test -d ${diskQueuePath} && rm -rf ${diskQueuePath} 
 
 #Make the disk Queue
-test -d ${diskQueuePath} || mkdir -p ${diskQueuePath}
+test -d ${diskQueuePath} || mkdir ${diskQueuePath}
 
 #run the thing
 ./redis_to_db

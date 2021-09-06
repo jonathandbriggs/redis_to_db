@@ -1,0 +1,11 @@
+# Everything but the DSN and type are sourced at run time.
+# DB type
+DB=redis
+# DSN connecting to the database
+#### postgres docs: https://pkg.go.dev/github.com/lib/pq@v1.10.2?utm_source=gopls#hdr-Connection_String_Parameters
+#### mysql docs: https://github.com/go-sql-driver/mysql#dsn-data-source-name
+DSN=redis:6379,,1
+# AUTH_MODE boolean seeing if we're using authentication
+AUTH_MODE=false
+# (optional) path to the authorized keys file. Default is ~/.ssh/authorized_keys
+#AUTHORIZED_KEYS=

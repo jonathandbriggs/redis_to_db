@@ -1,11 +1,8 @@
 //Redis Subscriber to file queue to Database insert.
-//TODO- Accept configurable REDIS topic and target DB.
-//TODO- Database Handling for pg/MySQL/Oracle?/SQL Server?
-//I redis sub stuff pulled from https://itnext.io/redis-as-a-pub-sub-engine-in-go-10eb5e6699cc
-
-//ToDo/InProgress
-//Converting from the hard-coded constant names to using the get_value_ functions in the configData struct..
-
+//Todo: figure out why bombs with 100 concurrent queued
+//Maybe peek regular instead of peekblock?
+//check out hang diagnostics something on por 6060
+//
 package main
 
 import (
@@ -18,9 +15,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-redis/redis" //Redis Client
-	"github.com/joncrlsn/dque"  //File Queue thing
-	_ "github.com/lib/pq"
+	"github.com/go-redis/redis"        //Redis Client
+	_ "github.com/go-sql-driver/mysql" //mysql driver
+	"github.com/joncrlsn/dque"         //File Queue thing
+	_ "github.com/lib/pq"              //postgres driver
 )
 
 //Constants
@@ -85,14 +83,6 @@ func (*configData) getRedisSubscribeTopic() string {
 func (*configData) getTargetDatabaseType() string {
 	return os.Getenv("targetDatabaseType")
 }
-func (*configData) getTargetDatabaseHost() string {
-	//May not be needed. Pending testing and usablity of not postgres
-	return os.Getenv("targetDatabaseHost")
-}
-func (*configData) getTargetDatabasePort() string {
-	//May not be needed. Pending testing and usablity of not postgres
-	return os.Getenv("targetDatabasePort")
-}
 func (*configData) getTargetDatabaseObject() string {
 	return os.Getenv("targetDatabaseObject")
 }
@@ -117,7 +107,7 @@ func makeQueue(c configData) *dque.DQue {
 	qDir := c.getQueuePath()
 	//
 	log.Println("qDir=", qDir)
-	segmentSize := 50
+	segmentSize := 1000
 	q, err := dque.NewOrOpen(qName, qDir, segmentSize, queueThisDataBuilder)
 	if err != nil {
 		panic(err)
@@ -165,51 +155,21 @@ func fncSubbedToRedis(c configData, q *dque.DQue) {
 	for msg := range channel {
 		//instantiate a copy of the struct where we're storing data.
 		//Unmarshal the data into the user.
-
 		//For Debug
 		log.Println("enq:" + msg.Payload)
 		//Drop the message to queue.
 		q.Enqueue(msg.Payload)
+		//log.Println("Queue Size", q.Size())
+		engageTurbo(c, q)
+
+		//log.Println("Sub to Redis side: Queue Size", q.Size())
 	}
 }
 
-func fncQueuetoDB(c configData, q *dque.DQue) {
+func fncQueuetoDB(c configData, q *dque.DQue, db *sql.DB) {
 	//Persist variables because we need to reference them like a million times.
 	targetDatabaseType := c.getTargetDatabaseType()
-	targetDatabaseDSN := c.getTargetDatabaseDSN()
 	targetDatabaseObject := c.getTargetDatabaseObject()
-
-	var db *sql.DB
-	var err error
-	//Setup Target DB Connection.
-	switch targetDatabaseType {
-	case "postgres", "mysql":
-		//mysql and postgres have different connection details
-		//postgresconnStr := "postgres://pqgotest:password@localhost/pqgotest?sslmode=verify-full"
-		//mysql   connStr := "username:password@protocol(address)/dbname?param=value"
-		log.Println("Connecting with dbtype", targetDatabaseType, "and dsn", targetDatabaseDSN)
-		db, err = sql.Open(targetDatabaseType, targetDatabaseDSN)
-		if err == nil {
-			log.Println("Connected to database. Doing a Ping()")
-			err = db.Ping()
-			if err != nil {
-				log.Println(err)
-				panic(err)
-			}
-			log.Println("Did a Ping()")
-		} else {
-			log.Println("Error connecting to database after Open", err)
-			panic("error")
-		}
-	default:
-		panic("fncQueuetoDB: Not ready to target type " + targetDatabaseType)
-	}
-
-	//Set connection parameterws
-	db.SetConnMaxLifetime(1 * time.Hour)
-	db.SetConnMaxIdleTime(15 * time.Minute)
-	db.SetMaxOpenConns(100)
-	db.SetMaxIdleConns(10)
 
 	//Loop always
 	for {
@@ -218,13 +178,31 @@ func fncQueuetoDB(c configData, q *dque.DQue) {
 		//repeat.
 		var iface interface{}
 		var err error
-		if iface, err = q.PeekBlock(); err != nil {
-			if err != dque.ErrEmpty {
-				log.Fatal("Error Peeking at item", err)
-			} else {
-				log.Println("peek:", iface)
-			}
+
+		//log.Println("Queue to DB Side: Queue Size: ", q.Size())
+		engageTurbo(c, q)
+
+		iface, err = q.Peek()
+		switch err {
+		//case dque.ErrCorruptedSegment:
+		//	log.Fatal("Corrupted Segment. Purge newest File.")
+		case dque.ErrQueueClosed:
+			q = makeQueue(c)
 		}
+
+		if iface == nil && q.Size() == 0 {
+			time.Sleep(3 * time.Second)
+			log.Println("Empty Queue Nap")
+			continue
+		}
+		if iface == nil && q.Size() != 0 {
+			_, err = q.Dequeue()
+			if err != nil {
+				panic("Nil iface on non-zero Queue.")
+			}
+
+		}
+		log.Println("peek:", iface)
 		//At this iface is an interfacing containing a string. That string is json.
 
 		//Using reflect, copy the iface value into v.
@@ -244,8 +222,8 @@ func fncQueuetoDB(c configData, q *dque.DQue) {
 		//Unmarshal json data from queue into the Map.
 		err = json.Unmarshal([]byte(v.String()), &dbData)
 		if err != nil {
-			log.Fatal("Errors with Unmarshal")
-			panic(err)
+			log.Println("Errors with Unmarshal")
+			q.DequeueBlock()
 		}
 
 		//build a list to hold keys
@@ -309,18 +287,80 @@ func fncQueuetoDB(c configData, q *dque.DQue) {
 		insert := insertPt1 + " ) VALUES ( " + insertPt2 + " )"
 
 		log.Println(insert, params)
-
 		_, err = db.Exec(insert, params...)
-
-		//This function currently doesn't return anything, so i've commented out the return
 		if err == nil {
 			log.Println("deq!")
-			q.Dequeue()
-
+			q.DequeueBlock()
 		} else {
-			log.Fatal("Error at the DB insert part of the queue to db loop.")
-			log.Fatal(err)
-			panic(err)
+			log.Println("Error at the DB insert part of the queue to db loop.")
+			log.Println(err)
+			//log.Fatal("Error at the DB Insert part of the DB Loop. Error: ", err)
+		}
+	}
+}
+
+func initDB(c configData) *sql.DB {
+	targetDatabaseType := c.getTargetDatabaseType()
+	targetDatabaseDSN := c.getTargetDatabaseDSN()
+	var err error
+	var db *sql.DB
+	//setup target db connection.
+	switch targetDatabaseType {
+	case "postgres", "mysql":
+		//mysql and postgres have different connection details
+		//postgresconnstr := "postgres://pqgotest:password@localhost/pqgotest?sslmode=verify-full"
+		//mysql   connstr := "username:password@protocol(address)/dbname?param=value"
+		log.Println("connecting with dbtype", targetDatabaseType, "and dsn", targetDatabaseDSN)
+		db, err = sql.Open(targetDatabaseType, targetDatabaseDSN)
+		if err == nil {
+			log.Println("connected to database. doing a ping()")
+			err = db.Ping()
+			if err != nil {
+				log.Println(err)
+				//panic(err)
+			}
+			log.Println("did a ping()")
+		} else {
+			log.Println("error connecting to database after open", err)
+			//panic("error")
+		}
+	default:
+		panic("fncqueuetodb: not ready to target type " + targetDatabaseType)
+	}
+
+	//set connection parameterws
+	db.SetConnMaxLifetime(1 * time.Hour)
+	db.SetConnMaxIdleTime(15 * time.Minute)
+	db.SetMaxOpenConns(100)
+	db.SetMaxIdleConns(10)
+
+	return db
+}
+func checkDB(c configData, db *sql.DB) {
+	var err error
+	for {
+		err = db.Ping()
+		if err != nil {
+			db.Close()
+			db = initDB(c)
+			break
+		} else {
+			time.Sleep(30)
+		}
+	}
+}
+
+func engageTurbo(c configData, q *dque.DQue) {
+	return
+	if q.Size() > 10 {
+		if !q.Turbo() {
+			log.Print("Setting Turbo ON")
+			q.TurboOn()
+		}
+	} else {
+		if q.Turbo() {
+			log.Print("Setting Turbo OFF")
+			q.TurboOff()
 		}
 	}
 }
@@ -330,6 +370,8 @@ func main() {
 
 	theConfig := configData{}
 
+	db := initDB(theConfig)
+
 	//Start the Queue.
 	q := makeQueue(theConfig)
 
@@ -337,6 +379,6 @@ func main() {
 	//Open the Redis Listener which places messages on the queue.
 	go fncSubbedToRedis(theConfig, q)
 	//Open the Database handler which loads the messages from the queue to your target db.
-	fncQueuetoDB(theConfig, q)
+	fncQueuetoDB(theConfig, q, db)
 
 }
