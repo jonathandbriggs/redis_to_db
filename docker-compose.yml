@@ -76,4 +76,20 @@ services:
       targetDatabaseObject: "example.table"
       targetDatabaseDatabase: "mysql"
       targetDatabaseDSN: "redis_to_db:redis_to_db@tcp(10.0.0.252)/example?"
+  redis_to_example_table_3:
+    restart: on-failure
+    image: redis_to_db
+    hostname: r2db3
+    environment: 
+      redisClientAddr: "redishost"
+      redisClientPort: "6379"
+      redisClientPass: ""
+      redisClientDB: 1
+      redisSubscribeTopic: "example.table"
+      targetDatabaseType: "postgres"
+      targetDatabaseHost: "unused, change dsn."
+      targetDatabasePort: 5432
+      targetDatabaseObject: "example.table"
+      targetDatabaseDatabase: "postgres"
+      targetDatabaseDSN: "postgres://root@10.0.0.240:26257/example?sslmode=disable"
 
