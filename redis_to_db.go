@@ -224,6 +224,7 @@ func fncQueuetoDB(c configData, q *dque.DQue, db *sql.DB) {
 		if err != nil {
 			log.Println("Errors with Unmarshal")
 			q.DequeueBlock()
+			continue //jrcichra caught me slippin, missing out on continues.
 		}
 
 		//build a list to hold keys
