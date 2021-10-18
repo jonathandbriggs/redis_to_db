@@ -1,0 +1,46 @@
+#Redis_to_db for rtl_433.incoming
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: r2db.rtl-433.incoming
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: ingestd
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        io.kompose.service: ingestd
+    spec:
+      containers:
+        - env:
+            - name: redisClientAddr
+              value: redisservice
+            - name: redisClientDB
+              value: "1"
+            - name: redisClientPass
+            - name: redisClientPort
+              value: "6379"
+            - name: redisSubscribeTopic
+              value: rtl_433.incoming
+            - name: targetDatabaseDSN
+              value: postgres://root@pic-cockroach-cockroachdb.cockroachdb:26257/example?sslmode=disable
+            - name: targetDatabaseDatabase
+              value: postgres
+            - name: targetDatabaseHost
+              value: unused, change dsn.
+            - name: targetDatabaseObject
+              value: rtl_433.incoming
+            - name: targetDatabasePort
+              value: "5432"
+            - name: targetDatabaseType
+              value: postgres
+          image: redis_to_db
+          name: redis-to-db
+          imagePullPolicy: Never
+          resources: {}
+      hostname: rtldb01
+      restartPolicy: Always

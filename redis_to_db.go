@@ -160,7 +160,7 @@ func fncSubbedToRedis(c configData, q *dque.DQue) {
 		//Drop the message to queue.
 		q.Enqueue(msg.Payload)
 		//log.Println("Queue Size", q.Size())
-		engageTurbo(c, q)
+		//engageTurbo(c, q)
 
 		//log.Println("Sub to Redis side: Queue Size", q.Size())
 	}
@@ -180,7 +180,7 @@ func fncQueuetoDB(c configData, q *dque.DQue, db *sql.DB) {
 		var err error
 
 		//log.Println("Queue to DB Side: Queue Size: ", q.Size())
-		engageTurbo(c, q)
+		//engageTurbo(c, q)
 
 		iface, err = q.Peek()
 		switch err {
@@ -294,6 +294,12 @@ func fncQueuetoDB(c configData, q *dque.DQue, db *sql.DB) {
 		} else {
 			log.Println("Error at the DB insert part of the queue to db loop.")
 			log.Println(err)
+			log.Println("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+
+			log.Println("Closing DB Connection, waiting 30 seconds, then reconnecting.")
+			db.Close()
+			time.Sleep(30 * time.Second)
+			db = initDB(c)
 			//log.Fatal("Error at the DB Insert part of the DB Loop. Error: ", err)
 		}
 	}

@@ -1,4 +1,7 @@
 *.exe
+*.sh
+config.txt
 postgres
 ingestdqueue
 redis_to_db
+doitthesamebutbetter.yml
