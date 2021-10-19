@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"reflect"
 	"sort"
 	"strconv"
 	"time"
@@ -48,7 +47,13 @@ import (
 //(current ingest defines insert to redis topic)
 //(new program) defines read from redis topic -> queue -> database (parameteratized)
 type queueThisData struct {
-	ingestData string
+	IngestData string
+}
+
+// Builder - abstracts out a dbRecord for dque to work
+// Something something memory pointer something.
+func queueThisDataBuilder() interface{} {
+	return &queueThisData{}
 }
 
 type configData struct {
@@ -92,12 +97,6 @@ func (*configData) getTargetDatabaseDatabase() string {
 }
 func (*configData) getTargetDatabaseDSN() string {
 	return os.Getenv("targetDatabaseDSN")
-}
-
-// Builder - abstracts out a dbRecord for dque to work
-// Something something memory pointer something.
-func queueThisDataBuilder() interface{} {
-	return &queueThisData{}
 }
 
 //Lifted from gps_collector.go
@@ -157,8 +156,14 @@ func fncSubbedToRedis(c configData, q *dque.DQue) {
 		//Unmarshal the data into the user.
 		//For Debug
 		log.Println("enq:" + msg.Payload)
+
+		//"wrap" the msg.payload in a "queueThisData Struct"
+		eqr := &queueThisData{IngestData: msg.Payload}
 		//Drop the message to queue.
-		q.Enqueue(msg.Payload)
+		err := q.Enqueue(eqr)
+		if err != nil {
+			log.Println("EQ Err: ", err)
+		}
 		//log.Println("Queue Size", q.Size())
 		//engageTurbo(c, q)
 
@@ -182,17 +187,18 @@ func fncQueuetoDB(c configData, q *dque.DQue, db *sql.DB) {
 		//log.Println("Queue to DB Side: Queue Size: ", q.Size())
 		//engageTurbo(c, q)
 
-		iface, err = q.Peek()
+		iface, err = q.PeekBlock()
 		switch err {
 		//case dque.ErrCorruptedSegment:
 		//	log.Fatal("Corrupted Segment. Purge newest File.")
 		case dque.ErrQueueClosed:
 			q = makeQueue(c)
+			continue //jrcichra caught me slippin, missing out on continues.
 		}
 
 		if iface == nil && q.Size() == 0 {
-			time.Sleep(3 * time.Second)
 			log.Println("Empty Queue Nap")
+			time.Sleep(3 * time.Second)
 			continue
 		}
 		if iface == nil && q.Size() != 0 {
@@ -208,19 +214,29 @@ func fncQueuetoDB(c configData, q *dque.DQue, db *sql.DB) {
 		//Using reflect, copy the iface value into v.
 		//v is a dumb name, but we only use it for a few rows.
 		//This reflect thing allows us to dynamically type.
-		v := reflect.ValueOf(iface)
+		//v := reflect.ValueOf(iface)
 		//the Kind function returns what datatype v is holding.
 		//If we didn't get a string here, something is wrong.
 		//At this point in time, that would be mostly a program problem. not a runtime problem.
-		if v.Kind() != reflect.String {
-			panic("We didn't get a string from our reflect call!")
+		//if v.Kind() != reflect.Struct {
+		//	log.Println("We didn't get a struct back from the queue. Toss that in the trash. By which I mean, delete it.")
+		//	q.DequeueBlock()
+		//	continue //jrcichra caught me slippin, missing out on continues.
+		//}
+
+		//Copy  the iface into new instance of queueThisData
+		f, ok := iface.(*queueThisData)
+		if !ok {
+			log.Println("Failed to Assert type: queueThisData. Delete record from queue.")
+			q.DequeueBlock()
+			continue //jrcichra caught me slippin, missing out on continues.
 		}
 
 		//Define the Map. This will be used to contain the json from ingestd as a map so we can build insert statement.
 		var dbData map[string]interface{}
 
 		//Unmarshal json data from queue into the Map.
-		err = json.Unmarshal([]byte(v.String()), &dbData)
+		err = json.Unmarshal([]byte(f.IngestData), &dbData)
 		if err != nil {
 			log.Println("Errors with Unmarshal")
 			q.DequeueBlock()
