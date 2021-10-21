@@ -4,6 +4,7 @@
 //check out hang diagnostics something on por 6060
 //
 //This is a test comment from my iPad.
+//slam bam thank you mam
 package main
 
 import (
